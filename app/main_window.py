@@ -56,7 +56,7 @@ class WPtoolApp(tk.Tk):
         self.numbers_tab = NumbersTab(notebook)
 
         notebook.add(self.notes_tab, text="Splunk")
-        notebook.add(self.tasks_tab, text="Tasks")
+        notebook.add(self.tasks_tab, text="Oracle")
         notebook.add(self.numbers_tab, text="Numbers")
 
 
