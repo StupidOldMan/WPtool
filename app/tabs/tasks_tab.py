@@ -1,8 +1,10 @@
 import json
 import threading
 import tkinter as tk
+import re
 from pathlib import Path
 from tkinter import ttk
+from tksheet import Sheet
 
 
 class TasksTab(tk.Frame):
@@ -27,18 +29,13 @@ class TasksTab(tk.Frame):
         self.selected_connection_index: int = -1
         self.connection = None
         self.run_query_button: tk.Button | None = None
-        self.results_tree: ttk.Treeview | None = None
-        self.results_menu: tk.Menu | None = None
+        self.results_sheet: Sheet | None = None
         self.query_input: tk.Text | None = None
         self.connection_combo: ttk.Combobox | None = None
         self._oracle_client_initialized = False
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-
-        tree_style = ttk.Style(self)
-        tree_style.configure("Oracle.Treeview", rowheight=24, font=("Segoe UI", 9))
-        tree_style.configure("Oracle.Treeview.Heading", font=("Segoe UI", 9, "bold"))
 
         self._load_settings()
 
@@ -180,27 +177,24 @@ class TasksTab(tk.Frame):
             fg="#204660",
         ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
 
-        self.results_tree = ttk.Treeview(
+        self.results_sheet = Sheet(
             results_frame,
-            columns=("result",),
-            show="headings",
-            style="Oracle.Treeview",
-            height=10,
+            height=320,
+            headers=["Result"],
+            data=[["Oracle results will appear here."]],
+            show_row_index=False,
+            theme="light blue",
+            font=("Segoe UI", 9, "normal"),
+            header_font=("Segoe UI", 9, "bold"),
+            popup_menu_font=("Segoe UI", 9, "normal"),
+            table_wrap="",
+            header_wrap="",
+            table_bg="#ffffff",
+            header_bg="#ffffff",
+            frame_bg="#ffffff",
         )
-        self.results_tree.heading("result", text="Result")
-        self.results_tree.column("result", width=840, anchor="w", stretch=True)
-        self.results_tree.grid(row=1, column=0, sticky="nsew", padx=(12, 0), pady=(0, 0))
-        self.results_tree.bind("<Control-c>", self._copy_selected_results)
-        self.results_tree.bind("<Button-3>", self._show_results_menu)
-
-        y_scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_tree.yview)
-        y_scroll.grid(row=1, column=1, sticky="ns", pady=(0, 0))
-        x_scroll = ttk.Scrollbar(results_frame, orient="horizontal", command=self.results_tree.xview)
-        x_scroll.grid(row=2, column=0, sticky="ew", padx=(12, 0), pady=(0, 10))
-        self.results_tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-        self.results_menu = tk.Menu(self, tearoff=0)
-        self.results_menu.add_command(label="Copy", command=self._copy_selected_results)
+        self.results_sheet.grid(row=1, column=0, sticky="nsew", padx=(12, 12), pady=(0, 10))
+        self.results_sheet.enable_bindings()
 
         tk.Label(
             card,
@@ -323,6 +317,13 @@ class TasksTab(tk.Frame):
             self.selected_connection_index = existing_index
             message = f"Selected existing Oracle settings #{existing_index + 1}."
 
+        self._write_settings_file()
+        self.status_var.set(message)
+        self._refresh_connection_combo()
+        self._refresh_info_cards()
+        self.connection = None
+
+    def _write_settings_file(self) -> None:
         storage_payload = {
             "selected_index": self.selected_connection_index,
             "connections": self.saved_connections,
@@ -331,10 +332,6 @@ class TasksTab(tk.Frame):
             json.dumps(storage_payload, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        self.status_var.set(message)
-        self._refresh_connection_combo()
-        self._refresh_info_cards()
-        self.connection = None
 
     def _create_info_card(
         self,
@@ -525,6 +522,19 @@ class TasksTab(tk.Frame):
 
         tk.Button(
             button_row,
+            text="Delete",
+            command=lambda: self._delete_settings_from_window(saved_tree),
+            bg="#d66c5f",
+            fg="white",
+            activebackground="#b65347",
+            activeforeground="white",
+            relief="flat",
+            padx=20,
+            pady=10,
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        tk.Button(
+            button_row,
             text="Save",
             command=lambda: self._save_settings_from_window(window),
             bg="#1f6f8b",
@@ -534,7 +544,7 @@ class TasksTab(tk.Frame):
             relief="flat",
             padx=20,
             pady=10,
-        ).grid(row=0, column=0)
+        ).grid(row=0, column=1)
 
     def _create_settings_entry(
         self,
@@ -613,56 +623,64 @@ class TasksTab(tk.Frame):
                             if isinstance(widget, ttk.Treeview):
                                 self._populate_saved_connections_tree(widget)
 
+    def _delete_settings_from_window(self, tree: ttk.Treeview) -> None:
+        selected_items = tree.selection()
+        if not selected_items:
+            self.status_var.set("Select a saved Oracle connection to delete.")
+            return
+
+        selected_index = int(selected_items[0])
+        if not 0 <= selected_index < len(self.saved_connections):
+            self.status_var.set("The selected Oracle connection is no longer available.")
+            return
+
+        deleted_name = self.saved_connections[selected_index].get("name", "").strip() or f"#{selected_index + 1}"
+        del self.saved_connections[selected_index]
+
+        if not self.saved_connections:
+            self.selected_connection_index = -1
+            self.name_var.set("")
+            self.host_var.set("")
+            self.port_var.set("1521")
+            self.service_name_var.set("")
+            self.username_var.set("")
+            self.password_var.set("")
+        else:
+            if selected_index < self.selected_connection_index:
+                self.selected_connection_index -= 1
+            if self.selected_connection_index >= len(self.saved_connections):
+                self.selected_connection_index = len(self.saved_connections) - 1
+            self._apply_connection(self.saved_connections[self.selected_connection_index])
+
+        self._write_settings_file()
+        self._populate_saved_connections_tree(tree)
+        self._refresh_connection_combo()
+        self._refresh_info_cards()
+        self.connection = None
+        self.status_var.set(f"Deleted Oracle settings {deleted_name}.")
+
     def _set_result_message(self, message: str) -> None:
         self._set_result_rows(["Result"], [(message,)])
 
     def _set_result_rows(self, columns: list[str], rows: list[tuple[str, ...]]) -> None:
-        if self.results_tree is None:
+        if self.results_sheet is None:
             return
 
-        self.results_tree.delete(*self.results_tree.get_children())
-        self.results_tree["columns"] = columns
-
-        for column in columns:
-            self.results_tree.heading(column, text=column)
-            self.results_tree.column(column, width=160, anchor="w", stretch=True)
-
-        for row in rows:
-            self.results_tree.insert("", tk.END, values=row)
-
-    def _copy_selected_results(self, _event: tk.Event | None = None) -> str | None:
-        if self.results_tree is None:
-            return None
-
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            return "break"
-
-        copied_lines: list[str] = []
-        for item_id in selected_items:
-            values = self.results_tree.item(item_id, "values")
-            copied_lines.append("\t".join("" if value is None else str(value) for value in values))
-
-        copied_text = "\n".join(copied_lines)
-        self.clipboard_clear()
-        self.clipboard_append(copied_text)
-        self.status_var.set(f"Copied {len(selected_items)} result row(s) to clipboard.")
-        return "break"
-
-    def _show_results_menu(self, event: tk.Event) -> str | None:
-        if self.results_tree is None or self.results_menu is None:
-            return None
-
-        item_id = self.results_tree.identify_row(event.y)
-        if item_id:
-            self.results_tree.selection_set(item_id)
-            self.results_tree.focus(item_id)
-
-        try:
-            self.results_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.results_menu.grab_release()
-        return "break"
+        data = [list(row) for row in rows] if rows else [["" for _ in columns]]
+        total_columns = max(len(columns), 1)
+        total_rows = max(len(data), 1)
+        self.results_sheet.headers(columns, redraw=False)
+        self.results_sheet.set_sheet_data_and_display_dimensions(
+            total_rows=total_rows,
+            total_columns=total_columns,
+        )
+        self.results_sheet.set_sheet_data(
+            data,
+            redraw=False,
+            reset_col_positions=True,
+            reset_row_positions=True,
+        )
+        self.results_sheet.set_all_column_widths(width=160, redraw=True)
 
     def _start_run_query(self) -> None:
         worker = threading.Thread(target=self._run_query_worker, daemon=True)
@@ -740,8 +758,18 @@ class TasksTab(tk.Frame):
             raise RuntimeError("Query input is not available.")
 
         sql = self.query_input.get("1.0", tk.END).strip()
+        sql = sql.rstrip()
+        if sql.endswith(";"):
+            sql = sql[:-1].rstrip()
         if not sql:
             raise RuntimeError("Enter a SQL query before running.")
+
+        normalized_sql = re.sub(r"^\s+", "", sql)
+        normalized_sql = re.sub(r"^/\*.*?\*/\s*", "", normalized_sql, flags=re.DOTALL)
+        normalized_sql = re.sub(r"^(--[^\n]*\n\s*)+", "", normalized_sql)
+        lowered_sql = normalized_sql.lower()
+        if not (lowered_sql.startswith("select") or lowered_sql.startswith("with")):
+            raise RuntimeError("Only SELECT queries are allowed in this tab.")
 
         cursor = self.connection.cursor()
         try:

@@ -1,8 +1,0 @@
-.venv/
-__pycache__/
-*.pyc
-splunk_settings.json
-index_settings.txt
-oracle_settings.json
-vendor/
-*.png
